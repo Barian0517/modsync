@@ -1,0 +1,5 @@
+mods:"D:\server\closingsong\mods"
+config:"D:\server\closingsong\config"
+tacz:"D:\server\closingsong\tacz"
+fancymenu:"D:\server\closingsong\fancymenu_data"
+modernfix:"D:\server\closingsong\modernfix"
