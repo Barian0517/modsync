@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap
 
-version = "1.1.9"  # 更新版本
+version = "1.2.1"  # 更新版本
 
 # -------------------------
 # 同步執行緒
@@ -224,30 +224,40 @@ class WorkerThread(QThread):
         tasks = []
         server_files_set = set()
         is_config_base = os.path.basename(os.path.normpath(local_base)).lower() == 'config'
-        for name, value in server_dict.items():
-            local_rel = f"{rel_path}/{name}" if rel_path else name
-            local_abs = os.path.join(local_base, local_rel.replace("/", os.sep))
-            if isinstance(value, dict):
-                os.makedirs(local_abs, exist_ok=True)
-                tasks.extend(self.collect_strict_tasks(value, local_base, local_rel))
-            else:
-                server_files_set.add(local_rel)
-                local_md5 = self.get_md5(local_abs) if os.path.exists(local_abs) else None
 
-                # 如果是 config 的 base 且啟用了只新增模式，遇到已存在檔案時跳過覆蓋檢查
-                if local_md5 is not None and self.only_add_config and is_config_base:
-                    # 已存在就跳過（不覆蓋、不刪除）
-                    self.log_signal.emit(f"[跳過覆蓋] config 模式：保留本地已有檔案 {local_rel}")
-                    continue
+        futures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            def process_file(name, value, rel):
+                local_rel = f"{rel}/{name}" if rel else name
+                local_abs = os.path.join(local_base, local_rel.replace("/", os.sep))
+                if isinstance(value, dict):
+                    os.makedirs(local_abs, exist_ok=True)
+                    return self.collect_strict_tasks(value, local_base, local_rel)
+                else:
+                    server_files_set.add(local_rel)
+                    local_md5 = self.get_md5(local_abs) if os.path.exists(local_abs) else None
+                    if local_md5 is not None and self.only_add_config and is_config_base:
+                        self.log_signal.emit(f"[跳過覆蓋] config 模式：保留本地已有檔案 {local_rel}")
+                        return []
+                    if local_md5 != value:
+                        if os.path.exists(local_abs):
+                            try:
+                                os.remove(local_abs)
+                            except Exception:
+                                pass
+                        return [local_rel]
+                    return []
 
-                if local_md5 != value:
-                    self.log_signal.emit(f"[MD5 不同或缺失] {local_rel}")
-                    if os.path.exists(local_abs):
-                        try:
-                            os.remove(local_abs)
-                        except Exception:
-                            pass
-                    tasks.append(local_rel)
+            for name, value in server_dict.items():
+                futures.append(executor.submit(process_file, name, value, rel_path))
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    tasks.extend(result)
+
+        # 多餘檔案刪除邏輯保持不變
+        ...
 
         # 刪除多餘檔案（若為 config 且啟用了僅新增模式，跳過刪除）
         if not (self.only_add_config and is_config_base):
