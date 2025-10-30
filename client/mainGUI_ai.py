@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap
 
-version = "1.2.1"  # 更新版本
+version = "1.2.2"  # 更新版本
 
 # -------------------------
 # 同步執行緒
@@ -67,13 +67,20 @@ class WorkerThread(QThread):
         for folder in folder_names:
             folder_lower = str(folder).lower()
 
-            # 🟢 特殊規則處理
+            # 🟢 特殊規則處理（已更新）
+            # 伺服器 "mods"  -> 客戶端 <mc_version_path>/mods/servermods   (嚴格同步)
+            # 伺服器 "clientmods" -> 客戶端 <mc_version_path>/mods/clientmods (非嚴格)
+            # 伺服器 "needsmods" -> 客戶端 <mc_version_path>/mods            (非嚴格)
+            folder_lower = str(folder).lower()
             if folder_lower == "mods":
                 folder_base = os.path.join(self.mc_version_path, "mods", "servermods")
                 strict_sync = True
             elif folder_lower == "clientmods":
                 folder_base = os.path.join(self.mc_version_path, "mods")
                 strict_sync = False
+            elif folder_lower == "needmods":
+                folder_base = os.path.join(self.mc_version_path, "mods", "clientmods")
+                strict_sync = True
             else:
                 folder_base = os.path.join(self.mc_version_path, folder)
                 strict_sync = False
@@ -473,15 +480,20 @@ class MainWindow(QWidget):
         if folder:
             self.path_input.setText(folder)
             mods_servermods = os.path.join(folder, "mods", "servermods")
+            mods_clientmods = os.path.join(folder, "mods", "clientmods")
+            # 確保兩個目錄都存在（servermods 為伺服器 mods 嚴格同步目的地；clientmods 為伺服器 clientmods 的對應）
             os.makedirs(mods_servermods, exist_ok=True)
+            os.makedirs(mods_clientmods, exist_ok=True)
             QMessageBox.information(
                 self, "提示",
                 f"已選擇版本資料夾：\n{folder}\n\n"
                 f"同步規則：\n"
-                f"• mods → {mods_servermods} (嚴格同步)\n"
-                f"• clientmods → {os.path.join(folder, 'mods')}\n"
-                f"• 其他 → {folder}/<foldername>/"
+                f"• mods (伺服器) → {mods_servermods} (嚴格同步，且不可多也不可少)\n"
+                f"• clientmods (伺服器) → {mods_clientmods}\n"
+                f"• needsmods (伺服器) → {os.path.join(folder, 'mods')}\n"
+                f"• 其他資料夾 → {folder}/<foldername>/"
             )
+
 
     def start_sync(self):
         self.start_btn.setEnabled(False)
@@ -562,8 +574,12 @@ if __name__ == "__main__":
 
     # ✅ 解析命令列參數
     args = sys.argv[1:]
+
     auto_mode = "--auto" in args
-    addconf_mode = "--addconf" in args
+    reconfig_mode = "--reconfig" in args  # 用於取消預設同步 config
+
+    # 預設啟用 config 同步，除非加上 --reconfig
+    addconf_mode = not reconfig_mode
 
     # ✅ 新增：處理 --dir 參數
     # ✅ 新增：處理 --dir 參數（支援含空格的路徑）
@@ -588,13 +604,18 @@ if __name__ == "__main__":
     splash.showMessage("載入中...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter, Qt.GlobalColor.white)
     splash.show()
 
+
     def start_main():
         window = MainWindow()
 
-        # ✅ 若使用 --addconf，預設勾選「僅同步新增設定檔」
-        if addconf_mode:
-            window.only_add_config_checkbox.setChecked(True)
-            window.append_log("⚙ 啟用參數 --addconf：自動勾選『僅同步新增設定檔』")
+        # ✅ 預設勾選「僅同步新增設定檔」
+        window.only_add_config_checkbox.setChecked(True)
+        window.append_log("⚙ 預設勾選『僅同步新增設定檔』")
+
+        # ✅ 若使用 --reconfig，取消預設勾選
+        if reconfig_mode:
+            window.only_add_config_checkbox.setChecked(False)
+            window.append_log("⚠ 啟用參數 --reconfig：取消預設『僅同步新增設定檔』")
 
         # ✅ 若使用 --dir，設定預設同步路徑
         if dir_path:
